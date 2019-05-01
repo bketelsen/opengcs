@@ -28,6 +28,7 @@ type Container struct {
 
 	container   runtime.Container
 	initProcess *Process
+	exitType    prot.NotificationType
 
 	processesMutex sync.Mutex
 	processesWg    sync.WaitGroup
@@ -88,7 +89,7 @@ func (c *Container) ExecProcess(process *oci.Process, conSettings stdio.Connecti
 
 	pid := p.Pid()
 	c.processesMutex.Lock()
-	c.processes[uint32(pid)] = newProcess(c, process, p, uint32(pid))
+	c.processes[uint32(pid)] = newProcess(c, process, p, uint32(pid), false)
 	c.processesMutex.Unlock()
 	return pid, nil
 }
@@ -135,18 +136,27 @@ func (c *Container) Kill(signal syscall.Signal) error {
 		"signal": signal,
 	}).Info("opengcs::Container::Kill")
 
-	return c.container.Kill(signal)
+	err := c.container.Kill(signal)
+	if err != nil {
+		return err
+	}
+	if signal == syscall.SIGTERM {
+		c.exitType = prot.NtGracefulExit
+	} else if signal == syscall.SIGKILL {
+		c.exitType = prot.NtForcedExit
+	}
+	return nil
 }
 
 // Wait waits for all processes exec'ed to finish as well as the init process
 // representing the container.
-func (c *Container) Wait() int {
+func (c *Container) Wait() prot.NotificationType {
 	logrus.WithFields(logrus.Fields{
 		"cid": c.id,
 	}).Info("opengcs::Container::Wait")
 
 	c.processesWg.Wait()
-	return c.initProcess.exitCode
+	return c.exitType
 }
 
 // AddNetworkAdapter adds `a` to the network namespace held by this container.
